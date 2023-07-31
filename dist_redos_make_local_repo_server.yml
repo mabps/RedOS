@@ -1,0 +1,206 @@
+# Next feature for relase
+# 1. Add auto reindex repository
+# 2. Add FTP access for upload some files 
+
+---
+- name: Configure new Server on RedOS 7.3 as local Repo.
+  hosts: "{{ variable_host | default('localhost') }}"
+#  become: yes
+#  become_user: '{{ name_of_user }}'
+  become_method: 'sudo'
+
+# https://phoenixnap.com/kb/create-local-yum-repository-centos
+# https://redos.red-soft.ru/base/server-configuring/service-repositories/create-repo/
+
+# https://www.digitalocean.com/community/tutorials/how-to-configure-apache-using-ansible-on-ubuntu-14-04  - handlers
+
+  vars:
+# Main configure vars
+    path_to_repo: '/srv/repo'
+    path_to_srv_dir: '/srv'
+    name_site_admin: admin
+    name_domen: test.local
+    name_server: repo
+    name_web_server_user: apache
+    
+
+# tech vars
+    list_soft:
+      - vsftpd
+      - httpd
+      - createrepo
+      - yum-utils
+      - incron
+
+
+#  vars_prompt:     # Need for ask are Name of user, which you make config plain
+#    - name: name_of_user
+#      prompt: "Please enter the name of user, for which we are making settings (default root) \n"
+#      private: no
+#      default: root
+
+  tasks:
+
+    - name: 'Disable SELinux control system'
+      ansible.posix.selinux:
+        policy: targeted
+        state: permissive
+      become: yes
+
+#    - name: 'Temporary disable SELinux in config file (security system)'
+#      ansible.builtin.lineinfile:
+#        path: '/etc/selinux/config'
+#        regexp: '^SELINUX='
+#        line: 'SELINUX=permissive'
+#      become: yes
+
+#    - name: 'Disable SELinux control system'
+#      ansible.builtin.shell: "setenforce Permissive"
+#      become: yes
+#      ignore_errors: true
+#      when: not ansible_check_mode
+  
+      
+      
+  
+    - name: 'Install web server and other soft'
+      ansible.builtin.yum:
+        name: '{{ list_soft }}'
+        state: present
+      become: yes
+
+    - name: 'Make a directory for repository'
+      ansible.builtin.file:
+        path: "{{ path_to_repo }}"
+        state: directory
+      become: yes
+      
+    - name: 'Make readme_file.txt - for test sevice'
+      ansible.builtin.lineinfile:
+        path: "{{ path_to_repo }}/readme.txt"
+        line: "{{ list_soft }}"
+        state: present
+        create: yes
+        mode: u=rw,g=r,o=r
+      become: yes
+
+    - name: 'Create repo - generate meta data in xml file'
+      ansible.builtin.shell: "createrepo {{ path_to_repo }}"
+      become: yes
+      ignore_errors: true
+      when: not ansible_check_mode  
+
+    - name: "Make some changes in config file for httpd - Step01"
+      ansible.builtin.lineinfile:
+        dest: '/etc/httpd/conf/httpd.conf'
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      become: yes
+      loop:
+        - { regexp: '^DocumentRoot "/var/www/html"', line: 'DocumentRoot "{{ path_to_repo }}"' }
+        - { regexp: '^<Directory "/var/www">', line: '<Directory "{{ path_to_srv_dir}}">' }
+        - { regexp: '^<Directory "/var/www/html">', line: '<Directory "{{ path_to_repo }}">' }
+        - { regexp: '^(.*)Options Indexes', line: '    Options Indexes Includes' }
+        - { regexp: '^ServerAdmin root@localhost', line: 'ServerAdmin {{name_site_admin}}@{{name_domen}}' }
+        - { regexp: '^#ServerName', line: 'ServerName {{name_server}}.{{name_domen}}:80' }
+    - name: "Configure httpd - that show full file name"
+      ansible.builtin.lineinfile:
+        dest: '/etc/httpd/conf/httpd.conf'
+        insertafter:
+        line: |
+            # Show full file name on website
+            <IfModule mod_autoindex.c>
+               IndexOptions NameWidth=*
+            </ifModule>
+      become: yes
+
+
+    - name: 'Remove Default site - remove Welcome.config'
+      ansible.builtin.shell: 'mv /etc/httpd/conf.d/welcome.conf /etc/httpd/conf.d/welcome.conf_'
+      become: yes
+      ignore_errors: true
+      when: not ansible_check_mode
+
+    - name: 'Add auto index module for httpd'
+      ansible.builtin.lineinfile:
+        dest: '/etc/httpd/conf.modules.d/mod_autoindex.conf'
+        create: yes
+        line: 'LoadModule autoindex_module modules/mod_autoindex.so'
+      become: yes
+
+    - name: 'Start the httpd service'
+      ansible.builtin.systemd:
+        state: started
+        name: httpd
+      become: yes
+    - name: 'Reload service httpd, if service was launched earlier and do not take the chenges in config file'
+      ansible.builtin.systemd:
+        name: httpd.service
+        enabled: true       
+        state: restarted
+      become: yes
+      
+#https://habr.com/ru/articles/66569/
+#    - name: 'Make ReIndex repository'
+
+
+
+# https://www.redhat.com/sysadmin/apache-yum-dnf-repo
+# setfacl -R -m u:apache:rwx /srv/repo/
+# chcon -Rt httpd_sys_content_t /srv/repo/
+    
+    #ansible-galaxy collection install ansible.posix
+    - name: 'Sets default ACL in SELinux for {{name_web_server_user}} ueser on {{ path_to_repo }}'
+      ansible.posix.acl:
+        path: '{{ path_to_repo }}'
+        entity: '{{name_web_server_user}}'
+        etype: user
+        permissions: rw
+        recursive : yes
+        default: true
+        state: present
+      become: yes
+
+
+#    - name: 'Enable SELinux in config file (security system)'
+#      ansible.builtin.lineinfile:
+#        path: '/etc/selinux/config'
+#        regexp: '^SELINUX='
+#        line: 'SELINUX=enforcing'
+#      become: yes
+    - name: 'Enable SELinux control system'
+      ansible.posix.selinux:
+        policy: targeted
+        state: enforcing
+      become: yes
+
+    - name: 'Change repo directory ownership, allow access for httpd'
+      ansible.builtin.file:
+        path: '{{path_to_repo}}'
+        owner: '{{name_web_server_user}}'
+        group: '{{name_web_server_user}}'
+        mode: u=rx,g=rx,o=rx
+        recurse : yes
+      become: yes
+
+
+    # https://habr.com/ru/companies/kingservers/articles/209644/
+    - name: 'Change SELinux politics for WEB server - allow access to {{path_to_repo}} directory'
+      ansible.builtin.shell: 
+      loop:
+        - "chcon -Rvt httpd_sys_rw_content_t /srv/repo/"
+      become: yes
+      ignore_errors: true
+      when: not ansible_check_mode
+#    - name: 'Allow apache to modify files in /srv/git_repos'
+#      community.general.sefcontext:
+#        target: '/srv/git_repos(/.*)?'
+#        setype: httpd_sys_rw_content_t
+#        state: present
+
+
+
+      
+#    - name: 'Make Default Setting for all users https://redos.red-soft.ru/base/manual/administration-users/skel/'  
+    
