@@ -1,0 +1,62 @@
+---
+- name: Ansible script for RedOS 7.3 - configure new WorkStation.
+#  hosts: "{{ variable_host | default('localhost') }}"
+#  become_user: '{{ name_of_user }}'
+  become_method: 'sudo'
+  become: yes   # !!! Run all task from Sudo
+
+  vars:
+# Main configure vars
+    url_local_repo: 'http://192.168.111.101/'
+
+# tech vars
+    list_soft:
+      - yandex-browser-stable.x86_64
+
+    list_packages:
+      - msttcore-fonts-installer-2.6-1.noarch.rpm
+
+# Request name of user on whpose behalf processes will be executed 
+#  vars_prompt:
+#    - name: name_of_user
+#      prompt: "Please enter the name of user, for which we are making settings (default root) \n"
+#      private: no
+#      default: root
+
+
+  tasks:
+    - name: 'install web server and other soft'
+      ansible.builtin.yum:
+        name: '{{ list_soft }}'
+        state: present
+      become: yes
+      
+#    - name: 'Make Default Setting for all users https://redos.red-soft.ru/base/manual/administration-users/skel/'  
+    - name: 'Create ShortCut on desktop for All Users'
+      ansible.builtin.copy:
+        src: /usr/share/applications/yandex-browser.desktop 
+        dest: /etc/skel/
+        remote_src: yes
+      become: yes
+
+    - name: 'Add local repository with extra apps'
+      ansible.builtin.yum_repository:
+        name: extra
+        description: EPEL YUM repo
+        file: local_extra_
+        baseurl: {{ url_local_repo }}
+        gpgcheck: no
+
+
+
+    #Group for make some dafult settings fo users    https://redos.red-soft.ru/base/arm/graph-env/dconf-usage/
+    - block: 
+        - name: 'Set scrensaver timer = 15 min '
+          lineinfile: 
+            path: '/etc/dconf/db/local.d/00_screensaver_15'
+            line: |
+                [org/mate/desktop/session]
+                idle-delay='15'
+                
+                
+            
